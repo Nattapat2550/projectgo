@@ -4,30 +4,20 @@
     <meta charset="UTF-8" />
     <title>MySite | ระบบล็อกอินและจัดการผู้ใช้</title>
 
-    <!-- รองรับ mobile/responsive -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-    <!-- คำอธิบายหน้าเว็บสำหรับ SEO + ผลการค้นหา -->
     <meta
       name="description"
-      content="ระบบล็อกอินด้วย React + Node.js/MongoDB รองรับการสมัครสมาชิก ล็อกอิน ตั้งค่าบัญชี ดาวน์โหลด และหน้าจัดการผู้ใช้ (Admin)."
+      content="ระบบล็อกอินและจัดการผู้ใช้ รองรับสมัครสมาชิก ยืนยันอีเมล ล็อกอิน Google ตั้งค่าโปรไฟล์ ดาวน์โหลด และหน้าแอดมิน"
     />
-
-    <!-- ให้ search engine index ได้ -->
     <meta name="robots" content="index,follow" />
 
-    <!-- เชื่อมต่อ backend ล่วงหน้า เพื่อลดเวลา /api/auth/status -->
-    <!-- เปลี่ยน URL ให้ตรงกับ backend จริงของโปรเจคคุณ ถ้าไม่ใช่ react1-k4e2 -->
-    <link rel="preconnect" href="https://react1-k4e2.onrender.com" />
-    <link rel="dns-prefetch" href="https://react1-k4e2.onrender.com" />
-
-    <!-- สไตล์หลัก (ของ dev) – ตอน build Vite จะ generate /assets/index-xxx.css เอง -->
-    <link rel="stylesheet" href="/css/style.css" />
+    <!-- ✅ เชื่อมต่อ backend ล่วงหน้า (ช่วยลดเวลาครั้งแรกที่เรียก API) -->
+    <link rel="preconnect" href="https://projectgob.onrender.com" />
+    <link rel="dns-prefetch" href="https://projectgob.onrender.com" />
   </head>
+
   <body>
     <div id="root"></div>
-
-    <!-- Entry ของ React (Vite) -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -5,8 +5,10 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 
-// ✅ lazy-load ทุกหน้าที่เป็น page เพื่อลดขนาด main bundle
-const LandingPage = lazy(() => import('./pages/LandingPage'));
+// ✅ ทำ Landing เป็น static import เพื่อตัด critical request chain
+import LandingPage from './pages/LandingPage';
+
+// ✅ lazy-load หน้าที่ไม่ใช่หน้าแรก เพื่อลด JS ตอนเริ่มโหลด
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const CheckCodePage = lazy(() => import('./pages/CheckCodePage'));
@@ -22,8 +24,7 @@ const DownloadPage = lazy(() => import('./pages/DownloadPage'));
 const App = () => {
   return (
     <Layout>
-      {/* Suspense ไว้ครอบ routing ทั้งหมด ให้ fallback ตอนโหลด chunk */}
-      <Suspense fallback={<div className="page-loading">กำลังโหลด...</div>}>
+      <Suspense fallback={<div className="page-loading" aria-busy="true">กำลังโหลด...</div>}>
         <Routes>
           {/* Public routes */}
           <Route path="/" element={<LandingPage />} />
@@ -44,7 +45,6 @@ const App = () => {
               </ProtectedRoute>
             }
           />
-
           <Route
             path="/settings"
             element={
@@ -53,7 +53,6 @@ const App = () => {
               </ProtectedRoute>
             }
           />
-
           <Route
             path="/download"
             element={
