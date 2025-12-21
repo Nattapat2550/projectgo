@@ -30,19 +30,34 @@ func NewRouter(cfg config.Config) http.Handler {
   // Rate limit: 400 req / 15min per IP (no external deps)
   r.Use(rateLimit(400, 15*time.Minute, ipKeyFunc(cfg.NodeEnv == "production")))
 
-  // CORS (front/back different domains, need credentials)
-  allowedOrigins := []string{cfg.FrontendURL}
+  // CORS (match docker backend behavior)
+  // - FRONTEND_URL can be comma-separated
+  // - dev: allow all
+  // - prod: allow only configured origins; if none configured, allow all
+  allowedOrigins := splitCSVOrigins(cfg.FrontendURL)
   if cfg.NodeEnv != "production" {
+    // Keep explicit localhost origins for clarity (even though dev allows all)
     allowedOrigins = append(allowedOrigins, "http://localhost:3000", "http://127.0.0.1:3000")
   }
-  r.Use(cors(allowedOrigins))
+  r.Use(cors(allowedOrigins, cfg.NodeEnv == "production"))
 
   // Build dependencies
   p := pureapi.NewClient(cfg.PureAPIBaseURL, cfg.PureAPIKey)
   h := handlers.New(cfg, p)
 
   // Routes (same paths as the old Node backend)
+  // Health endpoints (docker parity)
   r.Get("/health", h.Health)
+  r.Get("/healthz", h.Health)
+
+  // Root: redirect to frontend (docker parity)
+  r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+    if strings.TrimSpace(cfg.FrontendURL) != "" {
+      http.Redirect(w, r, strings.TrimSpace(cfg.FrontendURL), http.StatusFound)
+      return
+    }
+    handlers.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+  })
 
   r.Route("/api/auth", func(ar chi.Router) {
     ar.Post("/register", h.AuthRegister)
@@ -93,6 +108,23 @@ func NewRouter(cfg config.Config) http.Handler {
   })
 
   return r
+}
+
+func splitCSVOrigins(v string) []string {
+  v = strings.TrimSpace(v)
+  if v == "" {
+    return nil
+  }
+  parts := strings.Split(v, ",")
+  out := make([]string, 0, len(parts))
+  for _, p := range parts {
+    p = strings.TrimSpace(p)
+    p = strings.TrimRight(p, "/")
+    if p != "" {
+      out = append(out, p)
+    }
+  }
+  return out
 }
 
 func securityHeaders(next http.Handler) http.Handler {

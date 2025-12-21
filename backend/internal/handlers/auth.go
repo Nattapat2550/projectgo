@@ -88,7 +88,8 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
     To:      email,
     Subject: "Your verification code",
     Text:    fmt.Sprintf("Your code is %s. It expires in 10 minutes.", code),
-    HTML:    fmt.Sprintf("<p>Your code is <b>%s</b>. It expires in 10 minutes.</p>", code),
+    // TEXT-ONLY (เข้า Outlook ง่ายสุด)
+    HTML: "",
   })
 
   WriteJSON(w, http.StatusCreated, map[string]any{"ok": true})
@@ -166,7 +167,10 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
   }, &out)
   if err != nil {
     // map common conflict
-    if strings.Contains(strings.ToLower(err.Error()), "username") && strings.Contains(strings.ToLower(err.Error()), "taken") {
+    e := strings.ToLower(err.Error())
+    if (strings.Contains(e, "username") && strings.Contains(e, "taken")) ||
+      strings.Contains(e, "duplicate key") ||
+      strings.Contains(e, "users_username_key") {
       WriteJSON(w, http.StatusConflict, map[string]any{"error": "Username already taken"})
       return
     }
@@ -285,12 +289,14 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 
   // Do not reveal whether email exists
   if out.Ok && out.Data != nil {
-    link := strings.TrimRight(h.Cfg.FrontendURL, "/") + "/reset.html?token=" + url.QueryEscape(rawToken)
+    // SPA route: /reset?token=...
+    link := strings.TrimRight(h.Cfg.FrontendURL, "/") + "/reset?token=" + url.QueryEscape(rawToken)
     _ = h.Mail.Send(ctx, MailMessage{
       To:      email,
       Subject: "Password reset",
       Text:    "Reset your password using this link (valid 30 minutes): " + link,
-      HTML:    `<p>Reset your password (valid 30 minutes): <a href="` + link + `">` + link + `</a></p>`,
+      // TEXT-ONLY (เข้า Outlook ง่ายสุด)
+      HTML: "",
     })
   }
 

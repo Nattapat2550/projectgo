@@ -36,7 +36,7 @@ func (h *Handler) AuthGoogleCallback(w http.ResponseWriter, r *http.Request) {
   err = h.Pure.Post(ctx, "/api/internal/set-oauth-user", map[string]any{
     "email":      info.Email,
     "provider":   "google",
-    "oauthId":    info.ID,
+    "oauthId":    info.ID,        // ✅ แก้จาก Sub -> ID
     "pictureUrl": info.Picture,
     "name":       info.Name,
   }, &out)
@@ -88,7 +88,7 @@ func (h *Handler) AuthGoogleMobile(w http.ResponseWriter, r *http.Request) {
   err = h.Pure.Post(ctx, "/api/internal/set-oauth-user", map[string]any{
     "email":      info.Email,
     "provider":   "google",
-    "oauthId":    info.ID,
+    "oauthId":    info.ID, // ✅ แก้จาก Sub -> ID
     "pictureUrl": info.Picture,
     "name":       info.Name,
   }, &out)
