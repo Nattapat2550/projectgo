@@ -45,7 +45,6 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Check for preview mode (Node logic parity)
-	// Supports query param ?preview=1 or body {preview: true} or {mode: "preview"}
 	qPreview := r.URL.Query().Get("preview") == "1"
 	if qPreview || in.Preview || in.Mode == "preview" {
 		WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "preview": true})
@@ -60,6 +59,7 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Find existing user
 	var found okData[userDTO]
+	// Ignore error here to match Node behavior (treat as not found)
 	_ = h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"email": email}, &found)
 
 	if found.Ok && found.Data != nil && found.Data.IsEmailVerified {
@@ -71,11 +71,13 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	user := found.Data
 	if user == nil {
 		var created okData[userDTO]
+		// FIX: Handle network error as 503 (Node behavior), instead of 500
 		if err := h.Pure.Post(ctx, "/api/internal/create-user-email", map[string]any{"email": email}, &created); err != nil {
-			h.writeErrFrom(w, err)
+			h.writeError(w, http.StatusServiceUnavailable, "Pure API is temporarily unavailable (rate-limited/blocked). Please try again.")
 			return
 		}
-		// Pure API error or rate-limited (matches Node 503 response)
+		
+		// Pure API logical error or rate-limited (matches Node 503 response)
 		if !created.Ok || created.Data == nil {
 			h.writeError(w, http.StatusServiceUnavailable, "Pure API is temporarily unavailable (rate-limited/blocked). Please try again.")
 			return
@@ -87,12 +89,13 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	code := generateSixDigitCode()
 	expiresAt := time.Now().Add(10 * time.Minute).UTC()
 
+	// FIX: Handle store error as 503 (Node behavior), instead of 500
 	if err := h.Pure.Post(ctx, "/api/internal/store-verification-code", map[string]any{
 		"userId":    user.ID,
 		"code":      code,
 		"expiresAt": expiresAt,
 	}, nil); err != nil {
-		h.writeErrFrom(w, err)
+		h.writeError(w, http.StatusServiceUnavailable, "Cannot store verification code. Please try again.")
 		return
 	}
 
@@ -102,7 +105,7 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 		To:      email,
 		Subject: "Your verification code",
 		Text:    fmt.Sprintf("Your verification code is: %s\n\nThis code expires in 10 minutes.", code),
-		HTML:    "", // Intentionally empty to match Node behavior
+		HTML:    "", 
 	})
 	if err != nil {
 		emailSent = false
@@ -130,7 +133,6 @@ func (h *Handler) AuthVerifyCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// pure-api returns {ok:true, userId} or {ok:false, reason}
 	var resp map[string]any
 	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &resp); err != nil {
 		h.writeErrFrom(w, err)
@@ -180,10 +182,9 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	err := h.Pure.Post(ctx, "/api/internal/set-username-password", map[string]any{
 		"email":    email,
 		"username": username,
-		"password": password, // raw; pure-api hashes it
+		"password": password, 
 	}, &out)
 	if err != nil {
-		// Map Postgres errors to user friendly message
 		e := strings.ToLower(err.Error())
 		if (strings.Contains(e, "username") && strings.Contains(e, "taken")) ||
 			strings.Contains(e, "duplicate key") ||
@@ -206,7 +207,6 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookie(w, token, true)
 
-	// Return full user object to match Node behavior (allows Frontend to update state immediately)
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"token": token,
@@ -259,7 +259,6 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookie(w, token, in.Remember)
 
-	// Return full user object
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"role":  out.Data.Role,
@@ -318,11 +317,9 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create random token (64 hex chars = 32 bytes)
 	rawToken := randomHex(32)
 	expiresAt := time.Now().Add(30 * time.Minute).UTC()
 
-	// Create token in Pure API
 	var out okData[userDTO]
 	_ = h.Pure.Post(ctx, "/api/internal/create-reset-token", map[string]any{
 		"email":     email,
@@ -330,15 +327,13 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 		"expiresAt": expiresAt,
 	}, &out)
 
-	// Do not reveal whether email exists (security best practice, matches Node)
 	if out.Ok && out.Data != nil {
-		// Fix: Use correct frontend URL path (/reset.html) to match Node/Static file structure
 		link := strings.TrimRight(h.Cfg.FrontendURL, "/") + "/reset.html?token=" + url.QueryEscape(rawToken)
 		_ = h.Mail.Send(ctx, MailMessage{
 			To:      email,
 			Subject: "Password reset",
 			Text:    fmt.Sprintf("Reset your password using this link (valid 30 minutes):\n\n%s", link),
-			HTML:    "", // Text only
+			HTML:    "",
 		})
 	}
 
@@ -367,7 +362,6 @@ func (h *Handler) AuthResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// consume token -> user
 	var out okData[userDTO]
 	if err := h.Pure.Post(ctx, "/api/internal/consume-reset-token", map[string]any{"token": token}, &out); err != nil {
 		h.writeErrFrom(w, err)
@@ -378,7 +372,6 @@ func (h *Handler) AuthResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// set password
 	if err := h.Pure.Post(ctx, "/api/internal/set-password", map[string]any{
 		"userId":      out.Data.ID,
 		"newPassword": newPass,
@@ -397,10 +390,8 @@ func randomHex(nBytes int) string {
 }
 
 func generateSixDigitCode() string {
-	// 000000 - 999999
 	b := make([]byte, 3)
 	_, _ = rand.Read(b)
-	// 24-bit -> mod 1e6
 	v := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
 	v = v % 1000000
 	return fmt.Sprintf("%06d", v)
