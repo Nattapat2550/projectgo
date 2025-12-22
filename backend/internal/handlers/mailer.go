@@ -1,21 +1,15 @@
 package handlers
 
 import (
-  "crypto/rand"
   "bytes"
   "context"
   "encoding/base64"
-  "encoding/hex"
   "encoding/json"
   "errors"
   "fmt"
-  "mime"
-  "mime/quotedprintable"
   "net/http"
   "net/url"
   "strings"
-  "time"
-  "unicode/utf8"
 
   "projectgob-backend/internal/config"
 )
@@ -113,94 +107,29 @@ func (m *Mailer) refreshAccessToken(ctx context.Context) (string, error) {
 }
 
 func buildRawEmail(from string, msg MailMessage) string {
-  // Outlook is picky. Include Date + Message-ID and use safe encodings.
-  boundary := "alt_" + mailRandHex(12)
-  msgID := makeMessageID(from)
-
+  boundary := "mixedboundary123456789"
   var b strings.Builder
   b.WriteString(fmt.Sprintf("From: %s\r\n", from))
   b.WriteString(fmt.Sprintf("To: %s\r\n", msg.To))
-  b.WriteString(fmt.Sprintf("Subject: %s\r\n", encodeHeader(msg.Subject)))
-  b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
-  b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", msgID))
+  b.WriteString(fmt.Sprintf("Subject: %s\r\n", msg.Subject))
   b.WriteString("MIME-Version: 1.0\r\n")
 
-  // Prefer TEXT only (best deliverability). HTML is optional.
-  if strings.TrimSpace(msg.HTML) != "" {
+  if msg.HTML != "" {
     b.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n\r\n", boundary))
 
-    // text/plain
     b.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-    b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-    b.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
-    b.WriteString(encodeQP(msg.Text))
-    b.WriteString("\r\n")
+    b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+    b.WriteString(msg.Text + "\r\n")
 
-    // text/html
     b.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-    b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
-    b.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
-    b.WriteString(encodeQP(msg.HTML))
-    b.WriteString("\r\n")
+    b.WriteString("Content-Type: text/html; charset=UTF-8\r\n\r\n")
+    b.WriteString(msg.HTML + "\r\n")
 
     b.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
     return b.String()
   }
 
-  b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-  b.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
-  b.WriteString(encodeQP(msg.Text))
-  b.WriteString("\r\n")
+  b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+  b.WriteString(msg.Text + "\r\n")
   return b.String()
-}
-
-func encodeHeader(s string) string {
-  s = strings.TrimSpace(s)
-  if s == "" {
-    return ""
-  }
-  // If not valid UTF-8, fall back to raw.
-  if !utf8.ValidString(s) {
-    return s
-  }
-  // If all ASCII, no need for RFC 2047 encoding.
-  ascii := true
-  for _, r := range s {
-    if r > 127 {
-      ascii = false
-      break
-    }
-  }
-  if ascii {
-    return s
-  }
-  return mime.QEncoding.Encode("utf-8", s)
-}
-
-func encodeQP(s string) string {
-  var buf bytes.Buffer
-  w := quotedprintable.NewWriter(&buf)
-  _, _ = w.Write([]byte(s))
-  _ = w.Close()
-  return buf.String()
-}
-
-func makeMessageID(from string) string {
-  // <random@domain>
-  domain := "localhost"
-  if at := strings.LastIndex(from, "@"); at >= 0 && at+1 < len(from) {
-    d := strings.TrimSpace(from[at+1:])
-    d = strings.Trim(d, ">")
-    d = strings.Trim(d, "<")
-    if d != "" {
-      domain = d
-    }
-  }
-  return "<" + mailRandHex(16) + "@" + domain + ">"
-}
-
-func mailRandHex(nBytes int) string {
-  b := make([]byte, nBytes)
-  _, _ = rand.Read(b)
-  return hex.EncodeToString(b)
 }

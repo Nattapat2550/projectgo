@@ -1,160 +1,137 @@
 package handlers
 
 import (
-  "context"
-  "net/http"
-  "time"
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
 
-  "github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5"
 )
 
-type UserClaims struct {
-  ID   int64  `json:"id"`
-  Role string `json:"role"`
+type ctxKey string
+
+const (
+	ctxUser ctxKey = "user"
+)
+
+type AuthUser struct {
+	ID   int64  `json:"id"`
+	Role string `json:"role"`
 }
 
 type jwtClaims struct {
-  ID   int64  `json:"id"`
-  Role string `json:"role"`
-  // Compatibility with older code that used is_admin
-  IsAdmin bool `json:"is_admin"`
-  jwt.RegisteredClaims
+	UserID int64  `json:"userId"`
+	Role   string `json:"role"`
+	jwt.RegisteredClaims
 }
 
-type ctxKey int
+func (h *Handler) RequireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := extractTokenFromReq(r)
+		if token == "" {
+			h.writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
 
-const userKey ctxKey = 1
+		claims, err := h.parseToken(token)
+		if err != nil {
+			h.writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
 
-func (h *Handler) signToken(userID int64, role string) (string, error) {
-  now := time.Now()
-  cl := jwtClaims{
-    ID:     userID,
-    Role:   role,
-    IsAdmin: role == "admin",
-    RegisteredClaims: jwt.RegisteredClaims{
-      ExpiresAt: jwt.NewNumericDate(now.Add(30 * 24 * time.Hour)),
-      IssuedAt:  jwt.NewNumericDate(now),
-    },
-  }
-  t := jwt.NewWithClaims(jwt.SigningMethodHS256, cl)
-  return t.SignedString([]byte(h.Cfg.JWTSecret))
+		u := &AuthUser{ID: claims.UserID, Role: claims.Role}
+		ctx := context.WithValue(r.Context(), ctxUser, u)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
-func (h *Handler) setAuthCookie(w http.ResponseWriter, token string, remember bool) {
-  maxAge := 24 * time.Hour
-  if remember {
-    maxAge = 30 * 24 * time.Hour
-  }
-
-  // IMPORTANT:
-  // - Production (Render HTTPS + cross-site): must be SameSite=None + Secure=true
-  // - Dev (localhost): many browsers reject SameSite=None without Secure, so use Lax.
-  sameSite := http.SameSiteLaxMode
-  secure := false
-  if h.Cfg.NodeEnv == "production" {
-    sameSite = http.SameSiteNoneMode
-    secure = true
-  }
-
-  c := &http.Cookie{
-    Name:     "token",
-    Value:    token,
-    Path:     "/",
-    HttpOnly: true,
-    Secure:   secure,
-    SameSite: sameSite,
-    MaxAge:   int(maxAge.Seconds()),
-  }
-  http.SetCookie(w, c)
+func (h *Handler) RequireAdmin(next http.Handler) http.Handler {
+	return h.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := GetUser(r)
+		if u == nil || u.Role != "admin" {
+			h.writeError(w, http.StatusForbidden, "Forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
 }
 
-func (h *Handler) clearAuthCookie(w http.ResponseWriter) {
-  sameSite := http.SameSiteLaxMode
-  secure := false
-  if h.Cfg.NodeEnv == "production" {
-    sameSite = http.SameSiteNoneMode
-    secure = true
-  }
-
-  c := &http.Cookie{
-    Name:     "token",
-    Value:    "",
-    Path:     "/",
-    HttpOnly: true,
-    Secure:   secure,
-    SameSite: sameSite,
-    MaxAge:   -1,
-  }
-  http.SetCookie(w, c)
+func GetUser(r *http.Request) *AuthUser {
+	v := r.Context().Value(ctxUser)
+	if v == nil {
+		return nil
+	}
+	u, _ := v.(*AuthUser)
+	return u
 }
 
 func extractTokenFromReq(r *http.Request) string {
-  if c, err := r.Cookie("token"); err == nil && c.Value != "" {
-    return c.Value
-  }
-  if bt := bearerToken(r); bt != "" {
-    return bt
-  }
-  return ""
+	// 1) Authorization: Bearer ...
+	if t := bearerToken(r); t != "" {
+		return t
+	}
+	// 2) Cookie
+	c, err := r.Cookie("token")
+	if err == nil && c != nil && strings.TrimSpace(c.Value) != "" {
+		return strings.TrimSpace(c.Value)
+	}
+	return ""
+}
+
+func (h *Handler) signToken(userID int64, role string) (string, error) {
+	now := time.Now()
+	claims := jwtClaims{
+		UserID: userID,
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)),
+		},
+	}
+	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return t.SignedString([]byte(h.Cfg.JWTSecret))
 }
 
 func (h *Handler) parseToken(token string) (*jwtClaims, error) {
-  parsed, err := jwt.ParseWithClaims(token, &jwtClaims{}, func(t *jwt.Token) (any, error) {
-    return []byte(h.Cfg.JWTSecret), nil
-  })
-  if err != nil {
-    return nil, err
-  }
-  cl, ok := parsed.Claims.(*jwtClaims)
-  if !ok || !parsed.Valid {
-    return nil, jwt.ErrTokenInvalidClaims
-  }
-  return cl, nil
+	claims := &jwtClaims{}
+	_, err := jwt.ParseWithClaims(token, claims, func(_ *jwt.Token) (any, error) {
+		return []byte(h.Cfg.JWTSecret), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if claims.UserID <= 0 {
+		return nil, errors.New("invalid claims")
+	}
+	return claims, nil
 }
 
-func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
-  return func(w http.ResponseWriter, r *http.Request) {
-    token := extractTokenFromReq(r)
-    if token == "" {
-      h.writeError(w, http.StatusUnauthorized, "Unauthorized")
-      return
-    }
-    cl, err := h.parseToken(token)
-    if err != nil {
-      h.writeError(w, http.StatusUnauthorized, "Unauthorized")
-      return
-    }
-
-    u := UserClaims{ID: cl.ID, Role: cl.Role}
-    ctx := context.WithValue(r.Context(), userKey, u)
-    next(w, r.WithContext(ctx))
-  }
+func (h *Handler) setAuthCookie(w http.ResponseWriter, token string, remember bool) {
+	c := &http.Cookie{
+		Name:     "token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   h.Cfg.IsProduction(),
+	}
+	if remember {
+		c.MaxAge = int((7 * 24 * time.Hour).Seconds())
+		c.Expires = time.Now().Add(7 * 24 * time.Hour)
+	}
+	http.SetCookie(w, c)
 }
 
-func (h *Handler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
-  return h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-    u := GetUser(r)
-    if u.Role != "admin" {
-      // Backward compatibility: accept tokens that set is_admin=true
-      token := extractTokenFromReq(r)
-      if token != "" {
-        if cl, err := h.parseToken(token); err == nil && cl.IsAdmin {
-          next(w, r)
-          return
-        }
-      }
-      h.writeError(w, http.StatusForbidden, "Admin only")
-      return
-    }
-    next(w, r)
-  })
-}
-
-func GetUser(r *http.Request) UserClaims {
-  if v := r.Context().Value(userKey); v != nil {
-    if u, ok := v.(UserClaims); ok {
-      return u
-    }
-  }
-  return UserClaims{}
+func (h *Handler) clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   h.Cfg.IsProduction(),
+	})
 }

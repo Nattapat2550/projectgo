@@ -1,12 +1,7 @@
 package handlers
 
-import (
-  "net/http"
-)
+import "net/http"
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-  WriteJSON(w, http.StatusOK, map[string]any{
-    "ok":  true,
-    "env": h.Cfg.NodeEnv,
-  })
+  WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

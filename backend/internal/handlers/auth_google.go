@@ -1,107 +1,118 @@
 package handlers
 
 import (
-  "net/http"
-  "net/url"
-  "strings"
+	"context"
+	"net/http"
+	"net/url"
+	"strings"
 )
 
 // GET /api/auth/google
 func (h *Handler) AuthGoogleStart(w http.ResponseWriter, r *http.Request) {
-  u, ok := h.Google.AuthURL("state")
-  if !ok {
-    h.writeError(w, http.StatusInternalServerError, "Google auth is not configured on server")
-    return
-  }
-  http.Redirect(w, r, u, http.StatusFound)
+	u, ok := h.Google.AuthURL("state")
+	if !ok {
+		h.writeError(w, http.StatusServiceUnavailable, "Google login is temporarily unavailable. Please try again in a moment.")
+		return
+	}
+	http.Redirect(w, r, u, http.StatusFound)
 }
 
 // GET /api/auth/google/callback
 func (h *Handler) AuthGoogleCallback(w http.ResponseWriter, r *http.Request) {
-  ctx := r.Context()
-  code := r.URL.Query().Get("code")
-  if code == "" {
-    http.Redirect(w, r, h.Cfg.FrontendURL+"/login?error=oauth_failed", http.StatusFound)
-    return
-  }
+	ctx := r.Context()
 
-  info, err := h.Google.ExchangeWeb(ctx, code)
-  if err != nil || info == nil || info.Email == "" {
-    http.Redirect(w, r, h.Cfg.FrontendURL+"/login?error=oauth_failed", http.StatusFound)
-    return
-  }
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		h.writeError(w, http.StatusBadRequest, "Missing code")
+		return
+	}
 
-  // Upsert oauth user in pure-api
-  var out okData[userDTO]
-  err = h.Pure.Post(ctx, "/api/internal/set-oauth-user", map[string]any{
-    "email":      info.Email,
-    "provider":   "google",
-    "oauthId":    info.ID,        // ✅ แก้จาก Sub -> ID
-    "pictureUrl": info.Picture,
-    "name":       info.Name,
-  }, &out)
-  if err != nil || !out.Ok || out.Data == nil {
-    http.Redirect(w, r, h.Cfg.FrontendURL+"/login?error=oauth_failed", http.StatusFound)
-    return
-  }
+	info, err := h.Google.ExchangeWeb(ctx, code) // returns *googleUserInfo
+	if err != nil || info == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "Google login is temporarily unavailable. Please try again in a moment.")
+		return
+	}
 
-  token, err := h.signToken(out.Data.ID, out.Data.Role)
-  if err != nil {
-    http.Redirect(w, r, h.Cfg.FrontendURL+"/login?error=oauth_failed", http.StatusFound)
-    return
-  }
-  h.setAuthCookie(w, token, true)
+	user, err := h.setOAuthUser(ctx, info)
+	if err != nil {
+		h.writeErrFrom(w, err)
+		return
+	}
 
-  // Redirect logic same as Node
-  if out.Data.Username == nil || strings.TrimSpace(*out.Data.Username) == "" {
-    q := url.QueryEscape(info.Email)
-    http.Redirect(w, r, h.Cfg.FrontendURL+"/form?email="+q, http.StatusFound)
-    return
-  }
-  if out.Data.Role == "admin" {
-    http.Redirect(w, r, h.Cfg.FrontendURL+"/admin", http.StatusFound)
-    return
-  }
-  http.Redirect(w, r, h.Cfg.FrontendURL+"/home", http.StatusFound)
+	token, err := h.signToken(user.ID, user.Role)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "Token error")
+		return
+	}
+
+	h.setAuthCookie(w, token, true)
+
+	front := strings.TrimRight(h.Cfg.FrontendURL, "/")
+	frag := url.Values{}
+	frag.Set("token", token)
+	frag.Set("provider", "google")
+
+	http.Redirect(w, r, front+"/#"+frag.Encode(), http.StatusFound)
 }
 
-// POST /api/auth/google-mobile
-func (h *Handler) AuthGoogleMobile(w http.ResponseWriter, r *http.Request) {
-  ctx := r.Context()
-  var in struct{ AuthCode string `json:"authCode"` }
-  if err := ReadJSON(r, &in); err != nil {
-    h.writeError(w, http.StatusBadRequest, "Invalid JSON")
-    return
-  }
-  if strings.TrimSpace(in.AuthCode) == "" {
-    h.writeError(w, http.StatusBadRequest, "Missing authCode")
-    return
-  }
+// GET /api/auth/google-mobile
+func (h *Handler) AuthGoogleMobileStart(w http.ResponseWriter, r *http.Request) {
+	u, ok := h.Google.AuthURL("state")
+	if !ok {
+		h.writeError(w, http.StatusServiceUnavailable, "Google login is temporarily unavailable. Please try again in a moment.")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "url": u})
+}
 
-  info, err := h.Google.ExchangeMobile(ctx, in.AuthCode)
-  if err != nil || info == nil || info.Email == "" {
-    h.writeError(w, http.StatusUnauthorized, "Invalid Google auth")
-    return
-  }
+// GET /api/auth/google-mobile/callback?code=...
+func (h *Handler) AuthGoogleMobileCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
-  var out okData[userDTO]
-  err = h.Pure.Post(ctx, "/api/internal/set-oauth-user", map[string]any{
-    "email":      info.Email,
-    "provider":   "google",
-    "oauthId":    info.ID, // ✅ แก้จาก Sub -> ID
-    "pictureUrl": info.Picture,
-    "name":       info.Name,
-  }, &out)
-  if err != nil || !out.Ok || out.Data == nil {
-    h.writeError(w, http.StatusUnauthorized, "Invalid Google auth")
-    return
-  }
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		h.writeError(w, http.StatusBadRequest, "Missing code")
+		return
+	}
 
-  token, err := h.signToken(out.Data.ID, out.Data.Role)
-  if err != nil {
-    h.writeError(w, http.StatusInternalServerError, "Token error")
-    return
-  }
-  h.setAuthCookie(w, token, true)
-  WriteJSON(w, http.StatusOK, map[string]any{"role": out.Data.Role})
+	info, err := h.Google.ExchangeMobile(ctx, code) // returns *googleUserInfo
+	if err != nil || info == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "Google login is temporarily unavailable. Please try again in a moment.")
+		return
+	}
+
+	user, err := h.setOAuthUser(ctx, info)
+	if err != nil {
+		h.writeErrFrom(w, err)
+		return
+	}
+
+	token, err := h.signToken(user.ID, user.Role)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "Token error")
+		return
+	}
+
+	h.setAuthCookie(w, token, true)
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "token": token, "user": user})
+}
+
+// ✅ รับ pointer ตามของจริงใน google_oauth.go: ExchangeWeb/Mobile คืน *googleUserInfo
+func (h *Handler) setOAuthUser(ctx context.Context, info *googleUserInfo) (userDTO, error) {
+	email := strings.ToLower(strings.TrimSpace(info.Email))
+	subject := strings.TrimSpace(info.ID) // ของโปรเจคเดิมใช้ field ID เป็น unique subject
+	pic := strings.TrimSpace(info.Picture)
+
+	payload := map[string]any{
+		"provider":            "google",
+		"subject":             subject,
+		"email":               email,
+		"profile_picture_url": pic,
+	}
+
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/set-oauth-user", payload, &user); err != nil {
+		return userDTO{}, err
+	}
+	return user, nil
 }

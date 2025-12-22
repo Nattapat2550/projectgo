@@ -3,174 +3,148 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-var emailRegex = regexp.MustCompile(`^\S+@\S+\.\S+$`)
+var emailRe = regexp.MustCompile(`^\S+@\S+\.\S+$`)
 
-// userDTO matches the structure returned by pure-api
 type userDTO struct {
 	ID                int64   `json:"id"`
-	Username          *string `json:"username"`
 	Email             string  `json:"email"`
+	Username          *string `json:"username"`
 	Role              string  `json:"role"`
 	PasswordHash      *string `json:"password_hash"`
 	IsEmailVerified   bool    `json:"is_email_verified"`
+	OAuthProvider     *string `json:"oauth_provider"`
+	OAuthSubject      *string `json:"oauth_subject"`
 	ProfilePictureURL *string `json:"profile_picture_url"`
+	CreatedAt         string  `json:"created_at"`
 }
 
-type okData[T any] struct {
-	Ok   bool `json:"ok"`
-	Data *T   `json:"data"`
+type registerReq struct {
+	Email string `json:"email"`
+}
+type verifyReq struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+type completeProfileReq struct {
+	Email    string `json:"email"`
+	Code     string `json:"code"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Remember bool   `json:"remember"`
+}
+type loginReq struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Remember bool   `json:"remember"`
+}
+type forgotReq struct {
+	Email string `json:"email"`
+}
+type resetReq struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"newPassword"`
 }
 
-// --- /api/auth/register ---
+type verifyResp struct {
+	OK     bool    `json:"ok"`
+	UserID *int64  `json:"userId"`
+	Reason *string `json:"reason"`
+}
+
 func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var in struct {
-		Email   string `json:"email"`
-		Preview bool   `json:"preview"`
-		Mode    string `json:"mode"`
-	}
-	if err := ReadJSON(r, &in); err != nil {
+
+	var req registerReq
+	if err := ReadJSON(r, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-
-	// 1. Check for preview mode (Node logic parity)
-	qPreview := r.URL.Query().Get("preview") == "1"
-	if qPreview || in.Preview || in.Mode == "preview" {
-		WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "preview": true})
-		return
-	}
-
-	email := strings.TrimSpace(in.Email)
-	if email == "" || !emailRegex.MatchString(email) {
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	if email == "" || !emailRe.MatchString(email) {
 		h.writeError(w, http.StatusBadRequest, "Invalid email")
 		return
 	}
 
-	// 2. Find existing user
-	var found okData[userDTO]
-	// Ignore error here to match Node behavior (treat as not found)
-	_ = h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"email": email}, &found)
-
-	if found.Ok && found.Data != nil && found.Data.IsEmailVerified {
-		WriteJSON(w, http.StatusConflict, map[string]any{"error": "Email already registered"})
+	// create user if not exists (pure-api handles idempotency)
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/create-user-email", map[string]any{"email": email}, &user); err != nil {
+		h.writeErrFrom(w, err)
 		return
 	}
 
-	// 3. Create user if not exists
-	user := found.Data
-	if user == nil {
-		var created okData[userDTO]
-		// FIX: Handle network error as 503 (Node behavior), instead of 500
-		if err := h.Pure.Post(ctx, "/api/internal/create-user-email", map[string]any{"email": email}, &created); err != nil {
-			h.writeError(w, http.StatusServiceUnavailable, "Pure API is temporarily unavailable (rate-limited/blocked). Please try again.")
-			return
-		}
-		
-		// Pure API logical error or rate-limited (matches Node 503 response)
-		if !created.Ok || created.Data == nil {
-			h.writeError(w, http.StatusServiceUnavailable, "Pure API is temporarily unavailable (rate-limited/blocked). Please try again.")
-			return
-		}
-		user = created.Data
-	}
-
-	// 4. Generate & Store Code
 	code := generateSixDigitCode()
-	expiresAt := time.Now().Add(10 * time.Minute).UTC()
-
-	// FIX: Handle store error as 503 (Node behavior), instead of 500
-	if err := h.Pure.Post(ctx, "/api/internal/store-verification-code", map[string]any{
+	expiresAt := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
+	_ = h.Pure.Post(ctx, "/api/internal/store-verification-code", map[string]any{
 		"userId":    user.ID,
 		"code":      code,
 		"expiresAt": expiresAt,
-	}, nil); err != nil {
-		h.writeError(w, http.StatusServiceUnavailable, "Cannot store verification code. Please try again.")
-		return
+	}, nil)
+
+	emailSent := false
+	if !h.Cfg.EmailDisable {
+		subject := "Your verification code"
+		text := "Your verification code is: " + code + "\n\nThis code will expire in 10 minutes."
+		// ✅ FIX: Mailer.Send(ctx, MailMessage)
+		if err := h.Mail.Send(ctx, MailMessage{
+			To:      user.Email,
+			Subject: subject,
+			Text:    text,
+			HTML:    "",
+		}); err == nil {
+			emailSent = true
+		}
 	}
 
-	// 5. Send Email (Text only for better deliverability/Outlook)
-	emailSent := true
-	err := h.Mail.Send(ctx, MailMessage{
-		To:      email,
-		Subject: "Your verification code",
-		Text:    fmt.Sprintf("Your verification code is: %s\n\nThis code expires in 10 minutes.", code),
-		HTML:    "", 
-	})
-	if err != nil {
-		emailSent = false
-		fmt.Printf("sendEmail failed: %v\n", err)
-	}
-
-	WriteJSON(w, http.StatusCreated, map[string]any{"ok": true, "emailSent": emailSent})
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": emailSent})
 }
 
-// --- /api/auth/verify-code ---
 func (h *Handler) AuthVerifyCode(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var in struct {
-		Email string `json:"email"`
-		Code  string `json:"code"`
-	}
-	if err := ReadJSON(r, &in); err != nil {
+	var req verifyReq
+	if err := ReadJSON(r, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	email := strings.TrimSpace(in.Email)
-	code := strings.TrimSpace(in.Code)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	code := strings.TrimSpace(req.Code)
 	if email == "" || code == "" {
-		h.writeError(w, http.StatusBadRequest, "Missing email or code")
+		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
 
-	var resp map[string]any
+	var resp verifyResp
 	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &resp); err != nil {
 		h.writeErrFrom(w, err)
 		return
 	}
-	if ok, _ := resp["ok"].(bool); !ok {
-		if reason, _ := resp["reason"].(string); reason == "no_user" {
-			h.writeError(w, http.StatusNotFound, "User not found")
-			return
-		}
-		h.writeError(w, http.StatusBadRequest, "Invalid or expired code")
-		return
-	}
-	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": resp.OK})
 }
 
-// --- /api/auth/complete-profile ---
 func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var in struct {
-		Email    string `json:"email"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := ReadJSON(r, &in); err != nil {
+
+	var req completeProfileReq
+	if err := ReadJSON(r, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	email := strings.TrimSpace(in.Email)
-	username := strings.TrimSpace(in.Username)
-	password := in.Password
 
-	if email == "" || username == "" || password == "" {
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	code := strings.TrimSpace(req.Code)
+	username := strings.TrimSpace(req.Username)
+	password := req.Password
+
+	if email == "" || code == "" || username == "" || password == "" {
 		h.writeError(w, http.StatusBadRequest, "Missing fields")
-		return
-	}
-	if len(username) < 3 {
-		h.writeError(w, http.StatusBadRequest, "Username too short")
 		return
 	}
 	if len(password) < 8 {
@@ -178,181 +152,173 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var out okData[userDTO]
-	err := h.Pure.Post(ctx, "/api/internal/set-username-password", map[string]any{
+	var vr verifyResp
+	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &vr); err != nil {
+		h.writeErrFrom(w, err)
+		return
+	}
+	if !vr.OK {
+		h.writeError(w, http.StatusBadRequest, "Invalid code")
+		return
+	}
+
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/set-username-password", map[string]any{
 		"email":    email,
 		"username": username,
-		"password": password, 
-	}, &out)
-	if err != nil {
-		e := strings.ToLower(err.Error())
-		if (strings.Contains(e, "username") && strings.Contains(e, "taken")) ||
-			strings.Contains(e, "duplicate key") ||
-			strings.Contains(e, "users_username_key") {
-			WriteJSON(w, http.StatusConflict, map[string]any{"error": "Username already taken"})
+		"password": password,
+	}, &user); err != nil {
+		if isUsernameUniqueViolation(err) {
+			h.writeError(w, http.StatusConflict, "Username already taken")
 			return
 		}
 		h.writeErrFrom(w, err)
 		return
 	}
-	if !out.Ok || out.Data == nil {
-		h.writeError(w, http.StatusUnauthorized, "Email not verified")
-		return
-	}
 
-	token, err := h.signToken(out.Data.ID, out.Data.Role)
+	token, err := h.signToken(user.ID, user.Role)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, "Token error")
 		return
 	}
-	h.setAuthCookie(w, token, true)
+	h.setAuthCookie(w, token, req.Remember)
 
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"token": token,
-		"role":  out.Data.Role,
-		"user": map[string]any{
-			"id":                  out.Data.ID,
-			"email":               out.Data.Email,
-			"username":            out.Data.Username,
-			"role":                out.Data.Role,
-			"profile_picture_url": out.Data.ProfilePictureURL,
-		},
+		"user":  user,
 	})
 }
 
-// --- /api/auth/login ---
 func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var in struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Remember bool   `json:"remember"`
-	}
-	if err := ReadJSON(r, &in); err != nil {
+
+	var req loginReq
+	if err := ReadJSON(r, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	if email == "" || req.Password == "" {
+		h.writeError(w, http.StatusBadRequest, "Missing fields")
+		return
+	}
 
-	email := strings.TrimSpace(in.Email)
-	pass := in.Password
-
-	var out okData[userDTO]
-	if err := h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"email": email}, &out); err != nil {
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
 		h.writeErrFrom(w, err)
 		return
 	}
-	if !out.Ok || out.Data == nil || out.Data.PasswordHash == nil || strings.TrimSpace(*out.Data.PasswordHash) == "" {
+	if user.PasswordHash == nil || *user.PasswordHash == "" {
+		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(req.Password)); err != nil {
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(*out.Data.PasswordHash), []byte(pass)); err != nil {
-		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
-		return
-	}
-
-	token, err := h.signToken(out.Data.ID, out.Data.Role)
+	token, err := h.signToken(user.ID, user.Role)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, "Token error")
 		return
 	}
-	h.setAuthCookie(w, token, in.Remember)
+	h.setAuthCookie(w, token, req.Remember)
 
 	WriteJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
 		"token": token,
-		"role":  out.Data.Role,
-		"user": map[string]any{
-			"id":                  out.Data.ID,
-			"email":               out.Data.Email,
-			"username":            out.Data.Username,
-			"role":                out.Data.Role,
-			"profile_picture_url": out.Data.ProfilePictureURL,
-		},
+		"user":  user,
 	})
 }
 
-// --- /api/auth/logout ---
-func (h *Handler) AuthLogout(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tok := extractTokenFromReq(r)
+	if tok == "" {
+		WriteJSON(w, http.StatusOK, map[string]any{"ok": false})
+		return
+	}
+
+	claims, err := h.parseToken(tok)
+	if err != nil {
+		WriteJSON(w, http.StatusOK, map[string]any{"ok": false})
+		return
+	}
+
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"id": claims.UserID}, &user); err != nil {
+		WriteJSON(w, http.StatusOK, map[string]any{"ok": false})
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "user": user})
+}
+
+func (h *Handler) AuthLogout(w http.ResponseWriter, _ *http.Request) {
 	h.clearAuthCookie(w)
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// --- /api/auth/status ---
-func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
-	token := extractTokenFromReq(r)
-	if token == "" {
-		WriteJSON(w, http.StatusOK, map[string]any{"authenticated": false})
-		return
-	}
-	cl, err := h.parseToken(token)
-	if err != nil {
-		WriteJSON(w, http.StatusOK, map[string]any{"authenticated": false})
-		return
-	}
-	role := cl.Role
-	if role == "" {
-		role = "user"
-	}
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"authenticated": true,
-		"id":            cl.ID,
-		"role":          role,
-	})
-}
-
-// --- /api/auth/forgot-password ---
 func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var in struct {
-		Email string `json:"email"`
-	}
-	if err := ReadJSON(r, &in); err != nil {
+
+	var req forgotReq
+	if err := ReadJSON(r, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	email := strings.TrimSpace(in.Email)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" {
 		h.writeError(w, http.StatusBadRequest, "Missing email")
 		return
 	}
 
-	rawToken := randomHex(32)
-	expiresAt := time.Now().Add(30 * time.Minute).UTC()
-
-	var out okData[userDTO]
-	_ = h.Pure.Post(ctx, "/api/internal/create-reset-token", map[string]any{
-		"email":     email,
-		"token":     rawToken,
-		"expiresAt": expiresAt,
-	}, &out)
-
-	if out.Ok && out.Data != nil {
-		link := strings.TrimRight(h.Cfg.FrontendURL, "/") + "/reset.html?token=" + url.QueryEscape(rawToken)
-		_ = h.Mail.Send(ctx, MailMessage{
-			To:      email,
-			Subject: "Password reset",
-			Text:    fmt.Sprintf("Reset your password using this link (valid 30 minutes):\n\n%s", link),
-			HTML:    "",
-		})
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
+		// do not leak existence
+		WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": false})
+		return
 	}
 
-	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+	token := randomTokenHex(32)
+	expiresAt := time.Now().Add(30 * time.Minute).Format(time.RFC3339)
+
+	_ = h.Pure.Post(ctx, "/api/internal/create-reset-token", map[string]any{
+		"userId":    user.ID,
+		"token":     token,
+		"expiresAt": expiresAt,
+	}, nil)
+
+	emailSent := false
+	if !h.Cfg.EmailDisable {
+		resetLink := strings.TrimRight(h.Cfg.FrontendURL, "/") + "/reset?token=" + token
+		subject := "Reset your password"
+		text := "Click this link to reset your password:\n" + resetLink + "\n\nThis link expires in 30 minutes."
+
+		// ✅ FIX: Mailer.Send(ctx, MailMessage)
+		if err := h.Mail.Send(ctx, MailMessage{
+			To:      user.Email,
+			Subject: subject,
+			Text:    text,
+			HTML:    "",
+		}); err == nil {
+			emailSent = true
+		}
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": emailSent})
 }
 
-// --- /api/auth/reset-password ---
 func (h *Handler) AuthResetPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var in struct {
-		Token       string `json:"token"`
-		NewPassword string `json:"newPassword"`
-	}
-	if err := ReadJSON(r, &in); err != nil {
+
+	var req resetReq
+	if err := ReadJSON(r, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	token := strings.TrimSpace(in.Token)
-	newPass := in.NewPassword
+	token := strings.TrimSpace(req.Token)
+	newPass := req.NewPassword
 	if token == "" || newPass == "" {
 		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
@@ -362,20 +328,13 @@ func (h *Handler) AuthResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var out okData[userDTO]
-	if err := h.Pure.Post(ctx, "/api/internal/consume-reset-token", map[string]any{"token": token}, &out); err != nil {
-		h.writeErrFrom(w, err)
-		return
-	}
-	if !out.Ok || out.Data == nil {
+	var user userDTO
+	if err := h.Pure.Post(ctx, "/api/internal/consume-reset-token", map[string]any{"token": token}, &user); err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid or expired token")
 		return
 	}
 
-	if err := h.Pure.Post(ctx, "/api/internal/set-password", map[string]any{
-		"userId":      out.Data.ID,
-		"newPassword": newPass,
-	}, nil); err != nil {
+	if err := h.Pure.Post(ctx, "/api/internal/set-password", map[string]any{"id": user.ID, "password": newPass}, nil); err != nil {
 		h.writeErrFrom(w, err)
 		return
 	}
@@ -383,16 +342,18 @@ func (h *Handler) AuthResetPassword(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func randomHex(nBytes int) string {
+// ---- helpers ----
+
+func generateSixDigitCode() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	n := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
+	code := 100000 + (n % 900000)
+	return strconv.Itoa(code)
+}
+
+func randomTokenHex(nBytes int) string {
 	b := make([]byte, nBytes)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-func generateSixDigitCode() string {
-	b := make([]byte, 3)
-	_, _ = rand.Read(b)
-	v := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
-	v = v % 1000000
-	return fmt.Sprintf("%06d", v)
 }
