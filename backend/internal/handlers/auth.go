@@ -66,20 +66,20 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 
 	var req registerReq
 	if err := ReadJSON(r, &req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid JSON"})
+		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	
-	// ✅ เอา strings.ToLower ออก เพื่อให้ตรงกับโครงสร้าง Node.js 100% (ป้องกันหา email ไม่เจอ)
-	email := strings.TrimSpace(req.Email)
+	// ✅ แปลงพิมพ์เล็กเสมอเพื่อกันปัญหาเคสไม่ตรงตอน Login
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" || !emailRe.MatchString(email) {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid email"})
+		h.writeError(w, http.StatusBadRequest, "Invalid email")
 		return
 	}
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/create-user-email", map[string]any{"email": email}, &user); err != nil {
-		WriteJSON(w, http.StatusConflict, map[string]any{"error": "Email already registered"})
+		h.writeErrFrom(w, err)
 		return
 	}
 
@@ -105,7 +105,7 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	WriteJSON(w, http.StatusCreated, map[string]any{"ok": true, "emailSent": emailSent})
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": emailSent})
 }
 
 // ------ VERIFY CODE ------
@@ -113,27 +113,27 @@ func (h *Handler) AuthVerifyCode(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req verifyReq
 	if err := ReadJSON(r, &req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid JSON"})
+		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	email := strings.TrimSpace(req.Email)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	code := strings.TrimSpace(req.Code)
 	if email == "" || code == "" {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Missing email or code"})
+		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
 
 	var resp verifyResp
 	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &resp); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid or expired code"})
+		h.writeError(w, http.StatusBadRequest, "Invalid or expired code")
 		return
 	}
 	
 	if !resp.OK {
 		if resp.Reason != nil && *resp.Reason == "no_user" {
-			WriteJSON(w, http.StatusNotFound, map[string]any{"error": "User not found"})
+			h.writeError(w, http.StatusNotFound, "User not found")
 		} else {
-			WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid or expired code"})
+			h.writeError(w, http.StatusBadRequest, "Invalid or expired code")
 		}
 		return
 	}
@@ -147,24 +147,31 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 
 	var req completeProfileReq
 	if err := ReadJSON(r, &req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid JSON"})
+		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 
-	email := strings.TrimSpace(req.Email)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	code := strings.TrimSpace(req.Code)
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
 
-	if email == "" || username == "" || password == "" {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Missing fields"})
-		return
-	}
-	if len(username) < 3 {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Username too short"})
+	if email == "" || code == "" || username == "" || password == "" {
+		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
 	if len(password) < 8 {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Password too short"})
+		h.writeError(w, http.StatusBadRequest, "Password too short")
+		return
+	}
+
+	var vr verifyResp
+	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &vr); err != nil {
+		h.writeError(w, http.StatusBadRequest, "Invalid code")
+		return
+	}
+	if !vr.OK {
+		h.writeError(w, http.StatusBadRequest, "Invalid code")
 		return
 	}
 
@@ -175,16 +182,16 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 		"password": password,
 	}, &user); err != nil {
 		if isUsernameUniqueViolation(err) {
-			WriteJSON(w, http.StatusConflict, map[string]any{"error": "Username already taken"})
+			h.writeError(w, http.StatusConflict, "Username already taken")
 			return
 		}
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "Email not verified"})
+		h.writeError(w, http.StatusUnauthorized, "Email not verified")
 		return
 	}
 
 	token, err := h.signToken(user.ID, user.Role)
 	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "Internal error"})
+		h.writeError(w, http.StatusInternalServerError, "Token error")
 		return
 	}
 	h.setAuthCookie(w, token, req.Remember)
@@ -209,38 +216,43 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	var req loginReq
 	if err := ReadJSON(r, &req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid JSON"})
+		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	email := strings.TrimSpace(req.Email)
+	
+	// ✅ ดัก ToLower ให้ตรงกัน 100% ทำให้ไม่ติดปัญหาหา User ไม่เจอ
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" || req.Password == "" {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid credentials"})
+		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
 
 	var user userDTO
-	// ✅ เปลี่ยนมาใช้ WriteJSON ตอบกลับเป็นรูปแบบ {"error": "..."} เพื่อให้ React ดักจับและโชว์แจ้งเตือนได้ถูกต้อง
+	// ✅ ใช้ h.writeError แบบดั้งเดิมของโปรเจค เพื่อให้พ่นโครงสร้าง {"error": "Invalid credentials"}
 	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials"})
+		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if user.PasswordHash == nil || *user.PasswordHash == "" {
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials"})
+		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(req.Password)); err != nil {
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials"})
+		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	token, err := h.signToken(user.ID, user.Role)
 	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "Internal error"})
+		h.writeError(w, http.StatusInternalServerError, "Token error")
 		return
 	}
+	
 	h.setAuthCookie(w, token, req.Remember)
 
+	// โครงสร้าง Payload ขากลับสมบูรณ์แบบ
 	WriteJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
 		"role":  user.Role,
 		"token": token,
 		"user": map[string]any{
@@ -293,12 +305,13 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 	var req forgotReq
 	if err := ReadJSON(r, &req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid JSON"})
+		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	email := strings.TrimSpace(req.Email)
+	
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Missing email"})
+		h.writeError(w, http.StatusBadRequest, "Missing email")
 		return
 	}
 
@@ -320,8 +333,8 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 	emailSent := false
 	if !h.Cfg.EmailDisable {
 		resetLink := strings.TrimRight(h.Cfg.FrontendURL, "/") + "/reset?token=" + token
-		subject := "Password reset"
-		text := "Reset your password using this link (valid 30 minutes):\n\n" + resetLink
+		subject := "Reset your password"
+		text := "Click this link to reset your password:\n" + resetLink + "\n\nThis link expires in 30 minutes."
 
 		if err := h.Mail.Send(ctx, MailMessage{
 			To:      user.Email,
@@ -341,28 +354,28 @@ func (h *Handler) AuthResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	var req resetReq
 	if err := ReadJSON(r, &req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid JSON"})
+		h.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	token := strings.TrimSpace(req.Token)
 	newPass := req.NewPassword
 	if token == "" || newPass == "" {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Missing fields"})
+		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
 	if len(newPass) < 8 {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Password too short"})
+		h.writeError(w, http.StatusBadRequest, "Password too short")
 		return
 	}
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/consume-reset-token", map[string]any{"token": token}, &user); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "Invalid or expired token"})
+		h.writeError(w, http.StatusBadRequest, "Invalid or expired token")
 		return
 	}
 
 	if err := h.Pure.Post(ctx, "/api/internal/set-password", map[string]any{"id": user.ID, "password": newPass}, nil); err != nil {
-		WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "Internal error"})
+		h.writeErrFrom(w, err)
 		return
 	}
 
