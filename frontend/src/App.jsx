@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
 import Layout from './components/Layout';
@@ -22,6 +22,28 @@ const ContactPage = lazy(() => import('./pages/ContactPage'));
 const DownloadPage = lazy(() => import('./pages/DownloadPage'));
 
 const App = () => {
+  // ✅ เพิ่ม useEffect สำหรับดักจับ Token เวลา Login ผ่าน Google
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes('token=')) {
+      const params = new URLSearchParams(hash.substring(1));
+      const token = params.get('token');
+      const role = params.get('role');
+
+      if (token) {
+        // เซฟ Token ลง LocalStorage เพื่อให้ Redux/Axios ดึงไปใช้ต่อได้
+        localStorage.setItem('token', token);
+        if (role) localStorage.setItem('role', role);
+
+        // เคลียร์ URL เพื่อซ่อน Token ไม่ให้รกหน้าจอและป้องกันความปลอดภัย
+        window.history.replaceState(null, '', window.location.pathname);
+
+        // โหลดหน้าใหม่ 1 ครั้ง เพื่อให้ระบบ State ยืนยันการเข้าสู่ระบบ
+        window.location.href = '/home';
+      }
+    }
+  }, []);
+
   return (
     <Layout>
       <Suspense fallback={<div className="page-loading" aria-busy="true">กำลังโหลด...</div>}>
