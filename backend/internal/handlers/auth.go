@@ -60,6 +60,7 @@ type verifyResp struct {
 	Reason *string `json:"reason"`
 }
 
+// ------ REGISTER ------
 func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -74,7 +75,6 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// create user if not exists (pure-api handles idempotency)
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/create-user-email", map[string]any{"email": email}, &user); err != nil {
 		h.writeErrFrom(w, err)
@@ -93,7 +93,6 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !h.Cfg.EmailDisable {
 		subject := "Your verification code"
 		text := "Your verification code is: " + code + "\n\nThis code will expire in 10 minutes."
-		// ✅ FIX: Mailer.Send(ctx, MailMessage)
 		if err := h.Mail.Send(ctx, MailMessage{
 			To:      user.Email,
 			Subject: subject,
@@ -107,6 +106,7 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": emailSent})
 }
 
+// ------ VERIFY CODE ------
 func (h *Handler) AuthVerifyCode(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req verifyReq
@@ -129,6 +129,7 @@ func (h *Handler) AuthVerifyCode(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": resp.OK})
 }
 
+// ------ COMPLETE PROFILE ------
 func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -183,13 +184,22 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookie(w, token, req.Remember)
 
+	// แก้ไข: กรอง Key ของข้อมูล user คืนกลับไปเหมือนโปรเจคก่อน
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"token": token,
-		"user":  user,
+		"role":  user.Role,
+		"user": map[string]any{
+			"id":                  user.ID,
+			"email":               user.Email,
+			"username":            user.Username,
+			"role":                user.Role,
+			"profile_picture_url": user.ProfilePictureURL,
+		},
 	})
 }
 
+// ------ LOGIN ------
 func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -225,40 +235,57 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookie(w, token, req.Remember)
 
+	// แก้ไข: กรอง Key ของข้อมูล user คืนกลับไปเหมือนโปรเจคก่อน
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"token": token,
-		"user":  user,
+		"role":  user.Role,
+		"user": map[string]any{
+			"id":                  user.ID,
+			"email":               user.Email,
+			"username":            user.Username,
+			"role":                user.Role,
+			"profile_picture_url": user.ProfilePictureURL,
+		},
 	})
 }
 
+// ------ STATUS ------
 func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tok := extractTokenFromReq(r)
 	if tok == "" {
-		WriteJSON(w, http.StatusOK, map[string]any{"ok": false})
+		WriteJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
 
 	claims, err := h.parseToken(tok)
 	if err != nil {
-		WriteJSON(w, http.StatusOK, map[string]any{"ok": false})
+		WriteJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"id": claims.UserID}, &user); err != nil {
-		WriteJSON(w, http.StatusOK, map[string]any{"ok": false})
+		WriteJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "user": user})
+	
+	// แก้ไข: คืนค่าให้เข้ากันกับ `{ authenticated: true, id, role }` 
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"authenticated": true,
+		"id":            user.ID,
+		"role":          user.Role,
+	})
 }
 
+// ------ LOGOUT ------
 func (h *Handler) AuthLogout(w http.ResponseWriter, _ *http.Request) {
 	h.clearAuthCookie(w)
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// ------ FORGOT / RESET PASSWORD ------
 func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -275,7 +302,6 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
-		// do not leak existence
 		WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": false})
 		return
 	}
@@ -295,7 +321,6 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 		subject := "Reset your password"
 		text := "Click this link to reset your password:\n" + resetLink + "\n\nThis link expires in 30 minutes."
 
-		// ✅ FIX: Mailer.Send(ctx, MailMessage)
 		if err := h.Mail.Send(ctx, MailMessage{
 			To:      user.Email,
 			Subject: subject,

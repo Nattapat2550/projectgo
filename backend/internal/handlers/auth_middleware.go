@@ -87,7 +87,8 @@ func (h *Handler) signToken(userID int64, role string) (string, error) {
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)),
+			// แก้ไข: ให้ JWT มีอายุ 30 วันเหมือนของ Node/NestJS
+			ExpiresAt: jwt.NewNumericDate(now.Add(30 * 24 * time.Hour)),
 		},
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -109,29 +110,47 @@ func (h *Handler) parseToken(token string) (*jwtClaims, error) {
 }
 
 func (h *Handler) setAuthCookie(w http.ResponseWriter, token string, remember bool) {
+	isProd := h.Cfg.IsProduction()
+	sameSite := http.SameSiteLaxMode
+	if isProd {
+		sameSite = http.SameSiteNoneMode // เทียบเท่า sameSite: 'none' ใน Node
+	}
+
 	c := &http.Cookie{
 		Name:     "token",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.Cfg.IsProduction(),
+		SameSite: sameSite,
+		Secure:   isProd,
 	}
+	
+	// แก้ไข: Remember = 30 วัน, ไม่ติ๊ก = 1 วัน (ตามมาตรฐานโปรเจคอื่นๆ)
 	if remember {
-		c.MaxAge = int((7 * 24 * time.Hour).Seconds())
-		c.Expires = time.Now().Add(7 * 24 * time.Hour)
+		c.MaxAge = int((30 * 24 * time.Hour).Seconds())
+		c.Expires = time.Now().Add(30 * 24 * time.Hour)
+	} else {
+		c.MaxAge = int((24 * time.Hour).Seconds())
+		c.Expires = time.Now().Add(24 * time.Hour)
 	}
+	
 	http.SetCookie(w, c)
 }
 
 func (h *Handler) clearAuthCookie(w http.ResponseWriter) {
+	isProd := h.Cfg.IsProduction()
+	sameSite := http.SameSiteLaxMode
+	if isProd {
+		sameSite = http.SameSiteNoneMode
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     "token",
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.Cfg.IsProduction(),
+		SameSite: sameSite,
+		Secure:   isProd,
 	})
 }
