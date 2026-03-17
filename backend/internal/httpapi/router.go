@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -19,7 +20,6 @@ func NewRouter(cfg config.Config) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// ✅ ใช้ middleware CORS ของจริง (mw_cors.go) ชื่อ cors(...)
 	allowedOrigins := []string{
 		"http://localhost:3000",
 		"http://127.0.0.1:3000",
@@ -30,12 +30,30 @@ func NewRouter(cfg config.Config) http.Handler {
 	r.Use(cors(allowedOrigins, true))
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	
+	// ✅ ป้องกัน 404 เมื่อคนพิมพ์โดเมนหลักของ Backend
+	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+		if cfg.FrontendURL != "" {
+			http.Redirect(w, req, cfg.FrontendURL, http.StatusFound)
+			return
+		}
+		w.Write([]byte("Backend API is running"))
+	})
+	
+	r.Get("/favicon.ico", func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	p := pureapi.NewClient(cfg.PureAPIBaseURL, cfg.PureAPIKey, cfg.PureAPIInternalURL)
 	h := handlers.New(cfg, p)
 
 	// ---- Auth ----
 	r.Route("/api/auth", func(ar chi.Router) {
+		// ✅ นำ Rate Limit มาใช้เฉพาะ /api/auth เหมือนใน Node.js
+		ar.Use(rateLimit(100, 15*time.Minute, func(req *http.Request) (string, error) {
+			return GetClientIP(req), nil
+		}))
+
 		ar.Post("/register", h.AuthRegister)
 		ar.Post("/verify-code", h.AuthVerifyCode)
 		ar.Post("/complete-profile", h.AuthCompleteProfile)
@@ -47,8 +65,9 @@ func NewRouter(cfg config.Config) http.Handler {
 
 		ar.Get("/google", h.AuthGoogleStart)
 		ar.Get("/google/callback", h.AuthGoogleCallback)
-		ar.Get("/google-mobile", h.AuthGoogleMobileStart)
-		ar.Get("/google-mobile/callback", h.AuthGoogleMobileCallback)
+		
+		// ✅ แก้ให้ Google Mobile ใช้งาน Route แบบ POST
+		ar.Post("/google-mobile", h.AuthGoogleMobileCallback)
 	})
 
 	// ---- Public ----

@@ -123,10 +123,20 @@ func (h *Handler) AuthVerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	var resp verifyResp
 	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &resp); err != nil {
-		h.writeErrFrom(w, err)
+		h.writeError(w, http.StatusBadRequest, "Invalid or expired code")
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"ok": resp.OK})
+	
+	if !resp.OK {
+		if resp.Reason != nil && *resp.Reason == "no_user" {
+			h.writeError(w, http.StatusNotFound, "User not found")
+		} else {
+			h.writeError(w, http.StatusBadRequest, "Invalid or expired code")
+		}
+		return
+	}
+	
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ------ COMPLETE PROFILE ------
@@ -155,7 +165,7 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 
 	var vr verifyResp
 	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &vr); err != nil {
-		h.writeErrFrom(w, err)
+		h.writeError(w, http.StatusBadRequest, "Invalid code")
 		return
 	}
 	if !vr.OK {
@@ -173,7 +183,7 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusConflict, "Username already taken")
 			return
 		}
-		h.writeErrFrom(w, err)
+		h.writeError(w, http.StatusUnauthorized, "Email not verified")
 		return
 	}
 
@@ -184,7 +194,6 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookie(w, token, req.Remember)
 
-	// แก้ไข: กรอง Key ของข้อมูล user คืนกลับไปเหมือนโปรเจคก่อน
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"token": token,
@@ -216,7 +225,8 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
-		h.writeErrFrom(w, err)
+		// ✅ ไม่ส่ง 404 กลับไป แต่ให้ส่งเป็น 401 เพื่อให้ Frontend รับรู้ว่ารหัสผิด (หรือไม่มีผู้ใช้)
+		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if user.PasswordHash == nil || *user.PasswordHash == "" {
@@ -235,7 +245,6 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookie(w, token, req.Remember)
 
-	// แก้ไข: กรอง Key ของข้อมูล user คืนกลับไปเหมือนโปรเจคก่อน
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"token": token,
@@ -271,7 +280,6 @@ func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// แก้ไข: คืนค่าให้เข้ากันกับ `{ authenticated: true, id, role }` 
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"id":            user.ID,
