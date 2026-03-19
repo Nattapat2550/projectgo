@@ -144,11 +144,11 @@ func (h *Handler) setOAuthUser(ctx context.Context, info *googleUserInfo) (userD
 	name := strings.TrimSpace(info.Name)
 
 	payload := map[string]any{
-		"provider":            "google",
-		"subject":             subject,
+		"oauth_provider":      "google",  
+		"oauth_subject":       subject,   
 		"email":               email,
 		"profile_picture_url": pic,
-		"name":                name, 
+		"username":            name,      
 	}
 
 	var user userDTO
