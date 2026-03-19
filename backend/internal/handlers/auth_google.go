@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 )
 
+// GET /api/auth/google
 // GET /api/auth/google
 func (h *Handler) AuthGoogleStart(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.Google.AuthURL("state")
@@ -30,12 +32,14 @@ func (h *Handler) AuthGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.Google.ExchangeWeb(ctx, code) // returns *googleUserInfo
 	if err != nil || info == nil {
+		fmt.Println("Google ExchangeWeb Error:", err) // ✅ แสดง Log 
 		http.Redirect(w, r, front+"/login?error=oauth_failed", http.StatusFound)
 		return
 	}
 
 	user, err := h.setOAuthUser(ctx, info)
 	if err != nil {
+		fmt.Println("Database setOAuthUser Error:", err) // ✅ แสดง Log 
 		http.Redirect(w, r, front+"/login?error=oauth_failed", http.StatusFound)
 		return
 	}
@@ -48,7 +52,6 @@ func (h *Handler) AuthGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 	h.setAuthCookie(w, token, true)
 
-	// จัดการ Role และ Fragment URL
 	role := user.Role
 	if role == "" {
 		role = "user"
@@ -56,7 +59,6 @@ func (h *Handler) AuthGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 	frag := "token=" + url.QueryEscape(token) + "&role=" + url.QueryEscape(role)
 
-	// Check Username เพื่อส่งไปกรอกโปรไฟล์ หรือเข้าหน้าหลัก
 	if user.Username == nil || *user.Username == "" {
 		http.Redirect(w, r, front+"/form?email="+url.QueryEscape(user.Email)+"#"+frag, http.StatusFound)
 		return

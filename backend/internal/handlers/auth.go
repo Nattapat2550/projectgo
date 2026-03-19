@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"crypto/rand"
+	"fmt"
 	"encoding/hex"
 	"net/http"
 	"regexp"
@@ -212,7 +213,7 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 
 // ------ LOGIN ------
 func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx := r.Context() // ✅ ห้ามลบตัวแปรนี้
 
 	var req loginReq
 	if err := ReadJSON(r, &req); err != nil {
@@ -220,24 +221,25 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// ✅ ดัก ToLower ให้ตรงกัน 100% ทำให้ไม่ติดปัญหาหา User ไม่เจอ
-	email := strings.TrimSpace(strings.ToLower(req.Email))
+	email := strings.TrimSpace(strings.ToLower(req.Email)) // ✅ ห้ามลบตัวแปรนี้
 	if email == "" || req.Password == "" {
 		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
 
 	var user userDTO
-	// ✅ ใช้ h.writeError แบบดั้งเดิมของโปรเจค เพื่อให้พ่นโครงสร้าง {"error": "Invalid credentials"}
 	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
+		fmt.Println("Login DB Error (find user):", err) // ✅ แสดง Log 
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if user.PasswordHash == nil || *user.PasswordHash == "" {
+		fmt.Println("Login Error: Password hash is nil") // ✅ แสดง Log 
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(req.Password)); err != nil {
+		fmt.Println("Login Error: Bcrypt mismatch") // ✅ แสดง Log 
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
@@ -250,7 +252,6 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	
 	h.setAuthCookie(w, token, req.Remember)
 
-	// โครงสร้าง Payload ขากลับสมบูรณ์แบบ
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
 		"role":  user.Role,
