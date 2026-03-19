@@ -1,0 +1,33 @@
+name: Go Backend CI
+
+# กำหนดให้รันเมื่อมีการ Push หรือ Pull Request เข้า branch 'main'
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  test:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest # ใช้ Linux server ของ GitHub ในการรัน
+
+    defaults:
+      run:
+        working-directory: ./backend # 📌 ชี้ไปที่โฟลเดอร์ backend ของคุณ
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21' # 📌 เปลี่ยนให้ตรงกับเวอร์ชัน Go ที่คุณใช้ใน go.mod
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Run Tests
+      # สั่งรันเทสทั้งหมด พร้อมแสดงรายละเอียด (-v) 
+      run: go test ./internal/httpapi -v
