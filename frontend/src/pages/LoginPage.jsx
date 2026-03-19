@@ -9,100 +9,74 @@ const LoginPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthenticated, role, status, error } = useSelector((s) => s.auth);
-
+  
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState(null);
 
-  // ✅ ตรวจสอบ URL Fragment สำหรับ Google Login
+  // ✅ 1. ตรวจสอบ Error จาก Google OAuth Redirect
   useEffect(() => {
-    const hash = window.location.hash;
-    if (hash && hash.includes('token=')) {
-      // เมื่อพบ token ใน URL ให้ทำการยืนยันสิทธิ์กับ Backend อีกครั้ง
+    const params = new URLSearchParams(location.search);
+    if (params.get('error') === 'oauth_failed') {
+      setLocalError('การเข้าสู่ระบบด้วย Google ล้มเหลว กรุณาลองใหม่อีกครั้ง');
+    }
+    
+    // ✅ 2. ตรวจสอบ Google Login Success (ผ่าน URL Fragment #token=...)
+    if (window.location.hash.includes('token=')) {
       dispatch(checkAuthStatus());
     }
-  }, [dispatch]);
-
-  useEffect(() => {
-    dispatch(clearAuthError());
-  }, [dispatch]);
+  }, [location, dispatch]);
 
   useEffect(() => {
     if (isAuthenticated) {
-      const dest = role === 'admin' 
-        ? '/admin' 
-        : (location.state && location.state.from?.pathname) || '/home';
+      const dest = role === 'admin' ? '/admin' : '/home';
       navigate(dest, { replace: true });
     }
-  }, [isAuthenticated, role, navigate, location]);
+  }, [isAuthenticated, role, navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLocalError(null);
+    dispatch(clearAuthError());
     try {
       await dispatch(login({ email, password, remember })).unwrap();
     } catch (errMsg) {
-      setLocalError(errMsg || 'Login failed');
+      // ไม่ต้องทำอะไร Redux จะเก็บ Error ไว้ให้แล้ว
     }
   };
 
   const handleGoogleLogin = () => {
-    // เรียกไปที่ API Start ของ Go
+    // ยิงตรงไปที่ Backend Google Start Route
     window.location.href = `${api.defaults.baseURL}/api/auth/google`;
   };
 
   return (
-    <>
-      <h2>Login</h2>
-      <form id="loginForm" onSubmit={handleSubmit}>
-        <label>Email</label>
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value.trim())}
-        />
+    <div className="login-container">
+      <h2>เข้าสู่ระบบ</h2>
+      <form onSubmit={handleSubmit}>
+        <label>อีเมล</label>
+        <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
 
-        <label>Password</label>
-        <input
-          type={showPassword ? 'text' : 'password'}
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <label>รหัสผ่าน</label>
+        <input type={showPassword ? 'text' : 'password'} required value={password} onChange={(e) => setPassword(e.target.value)} />
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem' }}>
-          <label>
-            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-            {" "}Remember me
-          </label>
-          <label>
-            <input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} />
-            {" "}แสดงรหัสผ่าน
-          </label>
+        <div className="options">
+          <label><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> จำฉันไว้</label>
+          <label><input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} /> แสดงรหัสผ่าน</label>
         </div>
 
         <button className="btn" type="submit" disabled={status === 'loading'}>
-          {status === 'loading' ? 'Logging in...' : 'Login'}
+          {status === 'loading' ? 'กำลังตรวจสอบ...' : 'เข้าสู่ระบบ'}
         </button>
-
-        <Link className="muted" to="/reset">Forgot Password?</Link>
       </form>
 
-      <div className="divider">or</div>
+      <div className="divider">หรือ</div>
+      <button className="btn outline" onClick={handleGoogleLogin}>Login with Google</button>
 
-      <button className="btn outline" type="button" onClick={handleGoogleLogin}>
-        Login with Google
-      </button>
-
-      {(localError || error) && (
-        <p className="muted" style={{ color: 'var(--acc-1)' }}>
-          {localError || error}
-        </p>
-      )}
-    </>
+      {(localError || error) && <p style={{ color: 'red', marginTop: '1rem' }}>{localError || error}</p>}
+    </div>
   );
 };
 

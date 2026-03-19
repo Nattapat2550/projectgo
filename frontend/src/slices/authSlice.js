@@ -14,9 +14,9 @@ export const checkAuthStatus = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const res = await api.get('/api/auth/status');
-      return res.data; 
+      return res.data; // { authenticated: true, id: 1, role: 'user' }
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error || 'Failed to check auth status');
+      return rejectWithValue(err.response?.data?.error || 'Session expired');
     }
   }
 );
@@ -25,11 +25,11 @@ export const login = createAsyncThunk(
   'auth/login',
   async ({ email, password, remember }, { rejectWithValue }) => {
     try {
-      // Backend (Go) คืนค่าโครงสร้าง { ok: true, user: { id, role, ... }, token: ... }
       const res = await api.post('/api/auth/login', { email, password, remember });
-      return res.data;
+      return res.data; // { ok: true, user: { id: 1, role: 'admin' }, token: '...' }
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error || 'Login failed');
+      // ดักจับ Error 401 และแสดงข้อความจาก Backend
+      return rejectWithValue(err.response?.data?.error || 'อีเมลหรือรหัสผ่านไม่ถูกต้อง');
     }
   }
 );
@@ -41,7 +41,7 @@ export const logout = createAsyncThunk(
       await api.post('/api/auth/logout');
       return {};
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error || 'Logout failed');
+      return rejectWithValue('Logout failed');
     }
   }
 );
@@ -68,9 +68,9 @@ const authSlice = createSlice({
         state.error = null;
       })
       .addCase(login.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        // ปรับการอ่านค่าให้ตรงกับ AuthLogin ใน Go
+        // ✅ แก้ไข: ดึงค่าจาก action.payload.user ตามที่ Go Backend ส่งมา
         if (action.payload.ok && action.payload.user) {
+          state.status = 'succeeded';
           state.isAuthenticated = true;
           state.role = action.payload.user.role;
           state.userId = action.payload.user.id;
