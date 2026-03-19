@@ -9,13 +9,12 @@ const initialState = {
   error: null
 };
 
-// เช็คสถานะจาก Cookie (ที่ Backend set ให้)
 export const checkAuthStatus = createAsyncThunk(
   'auth/checkStatus',
   async (_, { rejectWithValue }) => {
     try {
       const res = await api.get('/api/auth/status');
-      return res.data; // คาดหวัง { authenticated: true, id: ..., role: ... }
+      return res.data; 
     } catch (err) {
       return rejectWithValue(err.response?.data?.error || 'Failed to check auth status');
     }
@@ -26,8 +25,8 @@ export const login = createAsyncThunk(
   'auth/login',
   async ({ email, password, remember }, { rejectWithValue }) => {
     try {
+      // Backend (Go) คืนค่าโครงสร้าง { ok: true, user: { id, role, ... }, token: ... }
       const res = await api.post('/api/auth/login', { email, password, remember });
-      // Backend คืน { ok: true, user: { id, role, ... } }
       return res.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.error || 'Login failed');
@@ -53,13 +52,6 @@ const authSlice = createSlice({
   reducers: {
     clearAuthError(state) {
       state.error = null;
-    },
-    // ✅ เพิ่ม Reducer สำหรับรับข้อมูลจาก Google Login
-    setCredentials(state, action) {
-      const { id, role } = action.payload;
-      state.isAuthenticated = true;
-      state.role = role;
-      state.userId = id;
     }
   },
   extraReducers: (builder) => {
@@ -71,10 +63,14 @@ const authSlice = createSlice({
         state.role = authenticated ? role : null;
         state.userId = authenticated ? id : null;
       })
+      .addCase(login.pending, (state) => {
+        state.status = 'loading';
+        state.error = null;
+      })
       .addCase(login.fulfilled, (state, action) => {
         state.status = 'succeeded';
-        // ปรับให้ตรงกับ Payload ของ AuthLogin ใน Go
-        if (action.payload.ok) {
+        // ปรับการอ่านค่าให้ตรงกับ AuthLogin ใน Go
+        if (action.payload.ok && action.payload.user) {
           state.isAuthenticated = true;
           state.role = action.payload.user.role;
           state.userId = action.payload.user.id;
@@ -92,5 +88,5 @@ const authSlice = createSlice({
   }
 });
 
-export const { clearAuthError, setCredentials } = authSlice.actions;
+export const { clearAuthError } = authSlice.actions;
 export default authSlice.reducer;

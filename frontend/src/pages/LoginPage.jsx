@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { login, clearAuthError, setCredentials, checkAuthStatus } from '../slices/authSlice'; // ✅ เพิ่ม import
+import { login, clearAuthError, checkAuthStatus } from '../slices/authSlice';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import api from '../api';
 
@@ -16,22 +16,14 @@ const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState(null);
 
-  // ✅ 1. ตรวจสอบ Google Login จาก URL Fragment (#token=...&role=...)
+  // ✅ ตรวจสอบ URL Fragment สำหรับ Google Login
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash) {
-      const params = new URLSearchParams(hash.substring(1));
-      const token = params.get('token');
-      const role = params.get('role');
-
-      if (token) {
-        // เมื่อได้ token มาแล้ว ให้เช็คสถานะจริงจาก API
-        dispatch(checkAuthStatus()).then(() => {
-            navigate('/home', { replace: true });
-        });
-      }
+    if (hash && hash.includes('token=')) {
+      // เมื่อพบ token ใน URL ให้ทำการยืนยันสิทธิ์กับ Backend อีกครั้ง
+      dispatch(checkAuthStatus());
     }
-  }, [dispatch, navigate]);
+  }, [dispatch]);
 
   useEffect(() => {
     dispatch(clearAuthError());
@@ -39,7 +31,9 @@ const LoginPage = () => {
 
   useEffect(() => {
     if (isAuthenticated) {
-      const dest = role === 'admin' ? '/admin' : (location.state && location.state.from?.pathname) || '/home';
+      const dest = role === 'admin' 
+        ? '/admin' 
+        : (location.state && location.state.from?.pathname) || '/home';
       navigate(dest, { replace: true });
     }
   }, [isAuthenticated, role, navigate, location]);
@@ -55,7 +49,7 @@ const LoginPage = () => {
   };
 
   const handleGoogleLogin = () => {
-    // ส่งไปที่ Backend เพื่อเริ่ม OAuth
+    // เรียกไปที่ API Start ของ Go
     window.location.href = `${api.defaults.baseURL}/api/auth/google`;
   };
 
@@ -80,22 +74,34 @@ const LoginPage = () => {
         />
 
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem' }}>
-          <label><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Remember me</label>
-          <label><input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} /> แสดงรหัสผ่าน</label>
+          <label>
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            {" "}Remember me
+          </label>
+          <label>
+            <input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} />
+            {" "}แสดงรหัสผ่าน
+          </label>
         </div>
 
         <button className="btn" type="submit" disabled={status === 'loading'}>
           {status === 'loading' ? 'Logging in...' : 'Login'}
         </button>
+
         <Link className="muted" to="/reset">Forgot Password?</Link>
       </form>
 
       <div className="divider">or</div>
+
       <button className="btn outline" type="button" onClick={handleGoogleLogin}>
         Login with Google
       </button>
 
-      {(localError || error) && <p style={{ color: 'red' }}>{localError || error}</p>}
+      {(localError || error) && (
+        <p className="muted" style={{ color: 'var(--acc-1)' }}>
+          {localError || error}
+        </p>
+      )}
     </>
   );
 };
