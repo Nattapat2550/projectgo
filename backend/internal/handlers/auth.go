@@ -228,7 +228,7 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user userDTO
-	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
+	if err := h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"email": email}, &user); err != nil {
 		fmt.Println("Login DB Error (find user):", err) // ✅ แสดง Log 
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
@@ -317,7 +317,7 @@ func (h *Handler) AuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user userDTO
-	if err := h.Pure.Post(ctx, "/api/internal/find-user-by-email", map[string]any{"email": email}, &user); err != nil {
+	if err := h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"email": email}, &user); err != nil {
 		WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "emailSent": false})
 		return
 	}

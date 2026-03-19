@@ -143,12 +143,13 @@ func (h *Handler) setOAuthUser(ctx context.Context, info *googleUserInfo) (userD
 	pic := strings.TrimSpace(info.Picture)
 	name := strings.TrimSpace(info.Name)
 
+	// ✅ แก้ Key ให้ตรงกับที่ Rust SetOAuthUserBody (camelCase) คาดหวัง
 	payload := map[string]any{
-		"oauth_provider":      "google",  
-		"oauth_subject":       subject,   
-		"email":               email,
-		"profile_picture_url": pic,
-		"username":            name,      
+		"provider":   "google",
+		"oauthId":    subject,
+		"email":      email,
+		"pictureUrl": pic,
+		"name":       name,
 	}
 
 	var user userDTO
