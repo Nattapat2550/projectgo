@@ -56,6 +56,10 @@ const authSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
+      // ✅ เพิ่ม state.pending เพื่อให้แสดงหน้าโหลดระหว่างเช็ค
+      .addCase(checkAuthStatus.pending, (state) => {
+        state.status = 'loading';
+      })
       .addCase(checkAuthStatus.fulfilled, (state, action) => {
         state.status = 'succeeded';
         const { authenticated, role, id } = action.payload || {};
@@ -63,12 +67,18 @@ const authSlice = createSlice({
         state.role = authenticated ? role : null;
         state.userId = authenticated ? id : null;
       })
+      // ✅ เพิ่ม state.rejected เพื่อให้ถ้า Server พัง (401/500) ถือว่าไม่ได้ล็อกอินทันที หน้าเว็บจะได้ไม่ค้าง
+      .addCase(checkAuthStatus.rejected, (state) => {
+        state.status = 'failed';
+        state.isAuthenticated = false;
+        state.role = null;
+        state.userId = null;
+      })
       .addCase(login.pending, (state) => {
         state.status = 'loading';
         state.error = null;
       })
       .addCase(login.fulfilled, (state, action) => {
-        // ✅ แก้ไข: ดึงค่าจาก action.payload.user ตามที่ Go Backend ส่งมา
         if (action.payload.ok && action.payload.user) {
           state.status = 'succeeded';
           state.isAuthenticated = true;
