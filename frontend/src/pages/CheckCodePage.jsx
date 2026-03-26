@@ -25,7 +25,8 @@ const CheckCodePage = () => {
         email,
         code: code.trim()
       });
-      navigate(`/form?email=${encodeURIComponent(email)}`);
+      // ✅ เพิ่มการส่ง code ไปยังหน้า /form ผ่าน URL Query
+      navigate(`/form?email=${encodeURIComponent(email)}&code=${encodeURIComponent(code.trim())}`);
     } catch (err) {
       setMsg(err.response?.data?.error || 'Invalid code');
     }
@@ -47,9 +48,9 @@ const CheckCodePage = () => {
             />
           </label>
         </div>
-        <button type="submit">Verify</button>
+        <button type="submit" className="btn mt-2">Verify</button>
       </form>
-      {msg && <p style={{ color: 'red' }}>{msg}</p>}
+      {msg && <p style={{ color: 'red', marginTop: '1rem' }}>{msg}</p>}
     </section>
   );
 };

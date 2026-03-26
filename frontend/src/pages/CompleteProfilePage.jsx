@@ -9,8 +9,10 @@ const CompleteProfilePage = () => {
   const dispatch = useDispatch();
   const [search] = useSearchParams();
   const emailFromQuery = search.get('email') || '';
+  const codeFromQuery = search.get('code') || ''; // ✅ ดึง code จาก URL
 
   const [email, setEmail] = useState(emailFromQuery);
+  const [code, setCode] = useState(codeFromQuery); // ✅ สร้าง state เก็บ code
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState(null);
@@ -26,8 +28,10 @@ const CompleteProfilePage = () => {
     e.preventDefault();
     setMsg(null);
     try {
+      // ✅ เพิ่ม code เข้าไปใน request body
       await api.post('/api/auth/complete-profile', {
         email: email.trim(),
+        code: code.trim(),
         username: username.trim(),
         password
       });
@@ -48,8 +52,23 @@ const CompleteProfilePage = () => {
             <input
               type="email"
               required
+              readOnly
+              style={{ opacity: 0.7 }}
               value={email}
               onChange={(e) => setEmail(e.target.value.trim())}
+            />
+          </label>
+        </div>
+        <div>
+          <label>
+            Verification Code
+            <input
+              type="text"
+              required
+              readOnly
+              style={{ opacity: 0.7 }}
+              value={code}
+              onChange={(e) => setCode(e.target.value.trim())}
             />
           </label>
         </div>
@@ -75,9 +94,9 @@ const CompleteProfilePage = () => {
             />
           </label>
         </div>
-        <button type="submit">Save</button>
+        <button type="submit" className="btn mt-3">Save</button>
       </form>
-      {msg && <p style={{ color: 'red' }}>{msg}</p>}
+      {msg && <p style={{ color: 'red', marginTop: '1rem' }}>{msg}</p>}
     </section>
   );
 };
