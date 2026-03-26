@@ -104,7 +104,7 @@ const Layout = ({ children }) => {
               }
             >
               <img
-                src={me?.profile_picture_url || '/images/user.png'}
+                src={me?.profile_picture_url || '../../images/user.png'}
                 alt="avatar"
                 onClick={() => setDropdownOpen((o) => !o)}
               />
