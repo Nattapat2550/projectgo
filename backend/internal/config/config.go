@@ -31,10 +31,10 @@ type Config struct {
 }
 
 func Load() Config {
-	// รองรับการรันจากทั้ง root/backend และ root/backend/cmd/server
+	// โหลด .env หากมีอยู่ในเครื่อง
 	_ = godotenv.Load(".env")
 	_ = godotenv.Load("../.env")
-	_ = godotenv.Load("../../.env") 
+	_ = godotenv.Load("../../.env")
 
 	cfg := Config{
 		Port:          getOr("PORT", "5000"),
@@ -53,31 +53,18 @@ func Load() Config {
 
 		RefreshToken: os.Getenv("REFRESH_TOKEN"),
 		SenderEmail:  os.Getenv("SENDER_EMAIL"),
-		EmailDisable: strings.EqualFold(os.Getenv("EMAIL_DISABLE"), "true"),
+		
+		// ✅ บังคับเปิดระบบส่งอีเมลเสมอ (เพิกเฉยต่อค่า EMAIL_DISABLE=true ที่อาจติดมา)
+		EmailDisable: false,
 
 		FrontendURL: getOr("FRONTEND_URL", "http://localhost:3000"),
 	}
 
-	// เช็คความครบถ้วนของตัวแปรระบบ
-	if cfg.PureAPIBaseURL == "" {
-		log.Println("WARN: PURE_API_BASE_URL is empty")
-	}
-	if cfg.PureAPIKey == "" {
-		log.Println("WARN: PURE_API_KEY is empty")
-	}
-	if cfg.JWTSecret == "" {
-		log.Println("WARN: JWT_SECRET is empty")
-	}
-	
-	// แจ้งเตือนเรื่องการส่งอีเมล
-	if !cfg.EmailDisable {
-		if cfg.SenderEmail == "" || cfg.RefreshToken == "" || cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" {
-			log.Println("⚠️ WARN: Email system is enabled but missing credentials (SENDER_EMAIL, REFRESH_TOKEN, GOOGLE_CLIENT_ID, or GOOGLE_CLIENT_SECRET). Emails will FAIL to send.")
-		} else {
-			log.Println("✅ Email system is configured.")
-		}
+	// แจ้งเตือนเรื่องการส่งอีเมลใน Log
+	if cfg.SenderEmail == "" || cfg.RefreshToken == "" || cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" {
+		log.Println("⚠️ WARN: Email system is ENABLED but missing credentials (SENDER_EMAIL, REFRESH_TOKEN, GOOGLE_CLIENT_ID, or GOOGLE_CLIENT_SECRET). Emails will FAIL to send.")
 	} else {
-		log.Println("ℹ️ Email system is DISABLED (EMAIL_DISABLE=true).")
+		log.Println("✅ Email system is configured and ENABLED.")
 	}
 
 	return cfg
