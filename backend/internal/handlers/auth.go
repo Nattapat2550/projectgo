@@ -37,7 +37,7 @@ type verifyReq struct {
 }
 type completeProfileReq struct {
 	Email    string `json:"email"`
-	Code     string `json:"code"`
+	// เอา Code ออก เพราะเช็คไปแล้วในขั้นตอนก่อนหน้า
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Remember bool   `json:"remember"`
@@ -71,7 +71,6 @@ func (h *Handler) AuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// ✅ แปลงพิมพ์เล็กเสมอเพื่อกันปัญหาเคสไม่ตรงตอน Login
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" || !emailRe.MatchString(email) {
 		h.writeError(w, http.StatusBadRequest, "Invalid email")
@@ -153,11 +152,11 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
-	code := strings.TrimSpace(req.Code)
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
 
-	if email == "" || code == "" || username == "" || password == "" {
+	// ไม่ต้องเช็ค code แล้ว
+	if email == "" || username == "" || password == "" {
 		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
 	}
@@ -166,15 +165,7 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var vr verifyResp
-	if err := h.Pure.Post(ctx, "/api/internal/verify-code", map[string]any{"email": email, "code": code}, &vr); err != nil {
-		h.writeError(w, http.StatusBadRequest, "Invalid code")
-		return
-	}
-	if !vr.OK {
-		h.writeError(w, http.StatusBadRequest, "Invalid code")
-		return
-	}
+	// ลบการเช็ค api/internal/verify-code ออกไปเลย เพราะตรวจและลบทิ้งไปตั้งแต่ Check Code แล้ว
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/set-username-password", map[string]any{
@@ -213,7 +204,7 @@ func (h *Handler) AuthCompleteProfile(w http.ResponseWriter, r *http.Request) {
 
 // ------ LOGIN ------
 func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context() // ✅ ห้ามลบตัวแปรนี้
+	ctx := r.Context()
 
 	var req loginReq
 	if err := ReadJSON(r, &req); err != nil {
@@ -221,7 +212,7 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	email := strings.TrimSpace(strings.ToLower(req.Email)) // ✅ ห้ามลบตัวแปรนี้
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" || req.Password == "" {
 		h.writeError(w, http.StatusBadRequest, "Missing fields")
 		return
@@ -229,17 +220,17 @@ func (h *Handler) AuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	var user userDTO
 	if err := h.Pure.Post(ctx, "/api/internal/find-user", map[string]any{"email": email}, &user); err != nil {
-		fmt.Println("Login DB Error (find user):", err) // ✅ แสดง Log 
+		fmt.Println("Login DB Error (find user):", err)
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if user.PasswordHash == nil || *user.PasswordHash == "" {
-		fmt.Println("Login Error: Password hash is nil") // ✅ แสดง Log 
+		fmt.Println("Login Error: Password hash is nil")
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(req.Password)); err != nil {
-		fmt.Println("Login Error: Bcrypt mismatch") // ✅ แสดง Log 
+		fmt.Println("Login Error: Bcrypt mismatch")
 		h.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}

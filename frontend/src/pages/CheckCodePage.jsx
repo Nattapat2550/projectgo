@@ -25,8 +25,8 @@ const CheckCodePage = () => {
         email,
         code: code.trim()
       });
-      // ✅ เพิ่มการส่ง code ไปยังหน้า /form ผ่าน URL Query
-      navigate(`/form?email=${encodeURIComponent(email)}&code=${encodeURIComponent(code.trim())}`);
+      // ✅ ส่งไปแค่ email อย่างเดียวเหมือนเดิม
+      navigate(`/form?email=${encodeURIComponent(email)}`);
     } catch (err) {
       setMsg(err.response?.data?.error || 'Invalid code');
     }
